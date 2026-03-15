@@ -178,7 +178,6 @@ function CodexMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; aut
 function CursorMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; autoTest?: boolean }) {
   const { t } = useI18n()
   const [servers, setServers] = useState<McpServer[]>([])
-  const [rawContent, setRawContent] = useState('')
   const [editing, setEditing] = useState<EditingServer | null>(null)
   const [editingIndex, setEditingIndex] = useState(-1)
   const [fileExists, setFileExists] = useState(false)
@@ -187,7 +186,6 @@ function CursorMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   const load = useCallback(async () => {
     const content = await window.electronAPI.readFile(configPaths.cursor.mcp)
     if (content) {
-      setRawContent(content)
       setServers(parseMcpJson(content))
       setFileExists(true)
     } else {
@@ -202,7 +200,6 @@ function CursorMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       const newContent = serializeMcpJson(newServers)
       const ok = await window.electronAPI.writeFile(configPaths.cursor.mcp, newContent)
       if (!ok) throw new Error('write returned false')
-      setRawContent(newContent)
       setServers(newServers)
       setFileExists(true)
       showToast('success', t('toast.saved'))
@@ -333,7 +330,8 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   function toggleGroup(key: string) {
     setExpandedGroups((prev) => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -517,7 +515,6 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
 
     setAllProjects(Array.from(projectMap.values()))
     setLoading(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configPaths, revision])
 
   useEffect(() => { loadAll() }, [loadAll])
@@ -536,7 +533,12 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
   }
 
   function toggleGroup(key: string) {
-    setExpandedGroups((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   }
   // editTarget.groupKey = "projectPath::entryIndex"
   function entryKey(projectPath: string, entryIdx: number) { return `${projectPath}::${entryIdx}` }
@@ -854,8 +856,7 @@ function ServerRow({ server, onEdit, onDelete, autoTest }: { server: McpServer; 
 
   useEffect(() => {
     if (autoTest && !testResult && testState === 'idle') runTest()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoTest])
+  }, [autoTest, testResult, testState])
 
   return (
     <div className="bg-surface-3/30 rounded-lg px-3 py-2.5 space-y-1.5">

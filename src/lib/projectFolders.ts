@@ -39,7 +39,6 @@ export function useProjectFolders(configPaths: ConfigPaths) {
   const discoverPaths = useCallback(async () => {
     // Always read fresh from localStorage so cross-page changes are picked up
     return discoverAllProjectPaths(loadSavedFolders(), configPaths)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revision, configPaths])
 
   async function addFolder(): Promise<string | null> {
