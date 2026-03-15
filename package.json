@@ -1,6 +1,6 @@
 {
   "name": "skillava",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Manage Skills & MCP configs for Claude Code, Codex, Cursor and more",
   "author": "Skill Ava Contributors",
   "license": "Apache-2.0",
