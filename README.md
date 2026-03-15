@@ -19,8 +19,9 @@ Skill Ava is a Mac desktop app that provides a single interface to manage config
 
 ## Screenshots
 
-<!-- TODO: Add screenshots -->
-<!-- ![Dashboard](./docs/screenshots/dashboard.png) -->
+![Skill Ava overview](./docs/screenshots/skill-ava-overview.png)
+
+Main workspace showing MCP service management for Codex, Claude Code, Cursor, Gemini CLI, and project-level configs.
 
 ## Features
 
