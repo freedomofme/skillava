@@ -26,15 +26,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build installable package
-        run: npm run pack
+      - name: Build release artifacts
+        run: |
+          npm run build
+          npx electron-builder --mac zip
 
       - name: Upload packaged app
         uses: actions/upload-artifact@v4
         with:
           name: skillava-macos-${{ github.ref_name }}
           path: |
-            release/*.dmg
             release/*.zip
             release/*.yml
             release/*.blockmap
@@ -47,7 +48,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            release/*.dmg \
             release/*.zip \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
