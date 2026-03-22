@@ -3,7 +3,7 @@ import { useI18n } from '../lib/i18n'
 import {
   Plus, Trash2, Edit3, Save, X, Server, Globe, Terminal,
   FolderOpen, ChevronDown, ChevronRight, Folder, FolderPlus,
-  FileJson, AlertCircle, Zap, Loader2, CheckCircle2, XCircle,
+  FileJson, AlertCircle, Zap, Loader2, CheckCircle2, XCircle, Download,
 } from 'lucide-react'
 import { ConfigPaths, McpServer, McpGroup, McpTestResult } from '../types'
 import {
@@ -17,6 +17,7 @@ import {
   updateClaudeStateMcpGlobal,
   updateClaudeStateProjectMcp,
 } from '../lib/parsers'
+import { parseMcpImportInput, prepareImportedServers } from '../lib/mcpImport'
 import { useProjectFolders, loadSavedFolders, SOURCE_BADGE } from '../lib/projectFolders'
 import { useToast } from '../lib/toast'
 import { loadSettings } from '../lib/settings'
@@ -40,24 +41,63 @@ const TOOL_TABS: { id: ToolTab; label: string; color: string }[] = [
 interface EditingServer {
   name: string
   type: 'url' | 'command'
+  transport: 'stdio' | 'http' | 'sse'
   url: string
   command: string
   args: string
   env: string
+  headers: string
 }
 
 function emptyEdit(): EditingServer {
-  return { name: '', type: 'command', url: '', command: '', args: '', env: '' }
+  return { name: '', type: 'command', transport: 'stdio', url: '', command: '', args: '', env: '', headers: '' }
+}
+
+function stringifyKeyValueLines(
+  value: Record<string, string> | undefined,
+  separator: '=' | ':',
+): string {
+  if (!value) return ''
+  return Object.entries(value)
+    .map(([key, item]) => separator === ':' ? `${key}: ${item}` : `${key}=${item}`)
+    .join('\n')
+}
+
+function parseKeyValueLines(value: string, separator: '=' | ':'): Record<string, string> | undefined {
+  if (!value.trim()) return undefined
+  const record: Record<string, string> = {}
+
+  value.split('\n').forEach((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+
+    const primaryIndex = trimmed.indexOf(separator)
+    const fallbackSeparator = separator === ':' ? '=' : ':'
+    const fallbackIndex = primaryIndex < 0 ? trimmed.indexOf(fallbackSeparator) : -1
+    const splitIndex = primaryIndex >= 0 ? primaryIndex : fallbackIndex
+    if (splitIndex <= 0) return
+
+    const key = trimmed.slice(0, splitIndex).trim()
+    const rawValue = trimmed.slice(splitIndex + 1).trim()
+    const normalizedValue = separator === ':' && rawValue.startsWith(':')
+      ? rawValue.slice(1).trim()
+      : rawValue
+    if (key && normalizedValue) record[key] = normalizedValue
+  })
+
+  return Object.keys(record).length ? record : undefined
 }
 
 function serverToEdit(s: McpServer): EditingServer {
   return {
     name: s.name,
     type: s.url ? 'url' : 'command',
+    transport: s.url ? (s.type === 'sse' ? 'sse' : 'http') : 'stdio',
     url: s.url || '',
     command: s.command || '',
     args: (s.args || []).join('\n'),
-    env: s.env ? Object.entries(s.env).map(([k, v]) => `${k}=${v}`).join('\n') : '',
+    env: stringifyKeyValueLines(s.env, '='),
+    headers: stringifyKeyValueLines(s.headers, ':'),
   }
 }
 
@@ -65,19 +105,15 @@ function editToServer(e: EditingServer): McpServer {
   const server: McpServer = { name: e.name }
   if (e.type === 'url') {
     server.url = e.url
+    server.type = e.transport
   } else {
     server.command = e.command
+    server.type = 'stdio'
     const args = e.args.split('\n').map((a) => a.trim()).filter(Boolean)
     if (args.length) server.args = args
   }
-  if (e.env.trim()) {
-    const env: Record<string, string> = {}
-    e.env.split('\n').forEach((line) => {
-      const idx = line.indexOf('=')
-      if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
-    })
-    server.env = env
-  }
+  server.env = parseKeyValueLines(e.env, '=')
+  server.headers = parseKeyValueLines(e.headers, ':')
   return server
 }
 
@@ -91,9 +127,10 @@ function parseMcpJson(content: string): McpServer[] {
       name,
       command: config.command,
       args: config.args,
-      url: config.url,
+      url: config.url || config.serverUrl,
       type: config.type,
       env: config.env,
+      headers: config.headers,
     }))
   } catch {
     return []
@@ -109,6 +146,7 @@ function serializeMcpJson(servers: McpServer[]): string {
     if (s.command) entry.command = s.command
     if (s.args?.length) entry.args = s.args
     entry.env = s.env || {}
+    if (s.headers && Object.keys(s.headers).length) entry.headers = s.headers
     mcpServers[s.name] = entry
   }
   return JSON.stringify({ mcpServers }, null, 2)
@@ -168,6 +206,7 @@ function CodexMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; aut
       }}
       onDelete={(i) => handleSave(servers.filter((_, idx) => idx !== i))}
       onOpenFile={() => window.electronAPI.openInFinder(configPaths.codex.config)}
+      onImport={(imported) => handleSave([...servers, ...imported])}
       autoTest={autoTest}
     />
   )
@@ -229,6 +268,7 @@ function CursorMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       }}
       onDelete={(i) => handleSave(servers.filter((_, idx) => idx !== i))}
       onOpenFile={() => window.electronAPI.openInFinder(configPaths.cursor.mcp)}
+      onImport={(imported) => handleSave([...servers, ...imported])}
       autoTest={autoTest}
     />
   )
@@ -293,6 +333,7 @@ function GeminiMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       }}
       onDelete={(i) => handleSave(servers.filter((_, idx) => idx !== i))}
       onOpenFile={() => window.electronAPI.openInFinder(configPaths.gemini.settings)}
+      onImport={(imported) => handleSave([...servers, ...imported])}
       autoTest={autoTest}
     />
   )
@@ -407,9 +448,25 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   }
 
   const renderGroups: RenderGroup[] = []
-  renderGroups.push({ key: 'settings', label: 'settings.json', hint: '~/.claude/settings.json', filePath: configPaths.claude.settings, icon: <Server size={14} className="text-emerald-400" />, servers: settingsServers })
+  renderGroups.push({
+    key: 'settings',
+    label: 'settings.json',
+    hint: '~/.claude/settings.json',
+    filePath: configPaths.claude.settings,
+    icon: <Server size={14} className="text-emerald-400" />,
+    servers: settingsServers,
+    onImport: async (imported) => saveSettings([...settingsServers, ...imported]),
+  })
   const gg = stateGroups.find((g) => g.scope === 'global')
-  if (gg) renderGroups.push({ key: 'global', label: t('mcp.global_mcp'), hint: '~/.claude.json → mcpServers', filePath: configPaths.claude.state, icon: <Globe size={14} className="text-amber-400" />, servers: gg.servers })
+  if (gg) renderGroups.push({
+    key: 'global',
+    label: t('mcp.global_mcp'),
+    hint: '~/.claude.json → mcpServers',
+    filePath: configPaths.claude.state,
+    icon: <Globe size={14} className="text-amber-400" />,
+    servers: gg.servers,
+    onImport: async (imported) => saveStateGlobal([...gg.servers, ...imported]),
+  })
 
   return (
     <GroupedMcpView
@@ -455,6 +512,7 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
   const [editTarget, setEditTarget] = useState<{ groupKey: string; index: number } | null>(null)
   const [editing, setEditing] = useState<EditingServer | null>(null)
   const [addTarget, setAddTarget] = useState<string | null>(null)
+  const [importTarget, setImportTarget] = useState<{ label: string; existingNames: string[]; onImport: (servers: McpServer[]) => Promise<void> } | null>(null)
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
 
@@ -613,7 +671,33 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
     }
   }
 
+  function openImport(ps: ProjectFolderState, entry: ProjectMcpEntry) {
+    setImportTarget({
+      label: `${ps.name} · ${entry.label}`,
+      existingNames: entry.servers.map((server) => server.name),
+      onImport: async (imported) => {
+        const nextServers = [...entry.servers, ...imported]
+        await saveEntry(entry, ps.path, nextServers)
+        setAllProjects((prev) => prev.map((project) => {
+          if (project.path !== ps.path) return project
+          const newEntries = project.entries.map((item) => (
+            item.filePath === entry.filePath && item.source === entry.source
+              ? { ...item, servers: nextServers, fileExists: true }
+              : item
+          ))
+          return {
+            ...project,
+            entries: newEntries,
+            totalServers: newEntries.reduce((sum, item) => sum + item.servers.length, 0),
+          }
+        }))
+        showToast('success', t('toast.saved'))
+      },
+    })
+  }
+
   return (
+    <>
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-xs text-text-muted">
@@ -672,9 +756,21 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
                           </span>
                         )}
                         <span className="flex-1" />
-                        <button onClick={() => window.electronAPI.openInFinder(entry.filePath)}
-                          className="p-1 rounded hover:bg-surface-4 text-text-muted hover:text-text-primary transition-colors" title={t('common.open_in_finder')}>
+                        <button
+                          onClick={() => openImport(ps, entry)}
+                          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-text-muted hover:bg-surface-4 hover:text-text-primary transition-colors"
+                          title={t('mcp.quick_import')}
+                        >
+                          <Download size={11} />
+                          {t('mcp.quick_import')}
+                        </button>
+                        <button
+                          onClick={() => window.electronAPI.openInFinder(entry.filePath)}
+                          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-text-muted hover:bg-surface-4 hover:text-text-primary transition-colors"
+                          title={t('common.open_in_finder')}
+                        >
                           <FolderOpen size={11} />
+                          {t('common.open_file')}
                         </button>
                       </div>
 
@@ -727,6 +823,18 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
         {t('common.add_project_folder')}
       </button>
     </div>
+    {importTarget && (
+      <QuickImportModal
+        targetLabel={importTarget.label}
+        existingNames={importTarget.existingNames}
+        onClose={() => setImportTarget(null)}
+        onImport={async (servers) => {
+          await importTarget.onImport(servers)
+          setImportTarget(null)
+        }}
+      />
+    )}
+    </>
   )
 }
 
@@ -739,6 +847,7 @@ interface RenderGroup {
   filePath?: string
   icon: React.ReactNode
   servers: McpServer[]
+  onImport?: (servers: McpServer[]) => Promise<void> | void
 }
 
 function GroupedMcpView({
@@ -761,7 +870,9 @@ function GroupedMcpView({
   autoTest?: boolean
 }) {
   const { t } = useI18n()
+  const [importTarget, setImportTarget] = useState<RenderGroup | null>(null)
   return (
+    <>
     <div className="space-y-4">
       {groups.map((group) => {
         const isExpanded = expandedGroups.has(group.key)
@@ -780,13 +891,24 @@ function GroupedMcpView({
                 <span className="flex-1" />
                 <span className="text-[11px] text-text-muted truncate max-w-[250px]">{group.hint}</span>
               </button>
+              {group.onImport && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setImportTarget(group) }}
+                  className="ml-2 flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-text-muted hover:bg-surface-4 hover:text-text-primary transition-colors flex-shrink-0"
+                  title={t('mcp.quick_import')}
+                >
+                  <Download size={13} />
+                  {t('mcp.quick_import')}
+                </button>
+              )}
               {group.filePath && (
                 <button
                   onClick={(e) => { e.stopPropagation(); window.electronAPI.openInFinder(group.filePath!) }}
-                  className="ml-2 p-1.5 rounded-md hover:bg-surface-4 text-text-muted hover:text-text-primary transition-colors flex-shrink-0"
+                  className="ml-2 flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-text-muted hover:bg-surface-4 hover:text-text-primary transition-colors flex-shrink-0"
                   title={t('common.open_in_finder')}
                 >
                   <FolderOpen size={13} />
+                  {t('common.open_file')}
                 </button>
               )}
             </div>
@@ -824,6 +946,15 @@ function GroupedMcpView({
         </div>
       )}
     </div>
+    {importTarget?.onImport && (
+      <QuickImportModal
+        targetLabel={importTarget.label}
+        existingNames={importTarget.servers.map((server) => server.name)}
+        onClose={() => setImportTarget(null)}
+        onImport={importTarget.onImport}
+      />
+    )}
+    </>
   )
 }
 
@@ -846,6 +977,7 @@ function ServerRow({ server, onEdit, onDelete, autoTest }: { server: McpServer; 
         args: server.args,
         url: server.url,
         env: server.env,
+        headers: server.headers,
       })
       setTestResult(result)
     } catch (err: any) {
@@ -871,13 +1003,16 @@ function ServerRow({ server, onEdit, onDelete, autoTest }: { server: McpServer; 
           <div className="mt-1 text-xs text-text-muted font-mono truncate">
             {server.url || `${server.command || ''} ${(server.args || []).join(' ')}`}
           </div>
-          {server.env && Object.keys(server.env).length > 0 && (
+          {(server.env && Object.keys(server.env).length > 0) || (server.headers && Object.keys(server.headers).length > 0) ? (
             <div className="mt-1.5 flex flex-wrap gap-1">
-              {Object.keys(server.env).map((key) => (
-                <span key={key} className="badge bg-surface-4/60 text-text-muted text-[10px]">{key}</span>
+              {Object.keys(server.env || {}).map((key) => (
+                <span key={`env-${key}`} className="badge bg-surface-4/60 text-text-muted text-[10px]">{key}</span>
+              ))}
+              {Object.keys(server.headers || {}).map((key) => (
+                <span key={`header-${key}`} className="badge bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px]">{key}</span>
               ))}
             </div>
-          )}
+          ) : null}
         </div>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-3">
           <button onClick={runTest} disabled={testState === 'testing'}
@@ -902,6 +1037,143 @@ function ServerRow({ server, onEdit, onDelete, autoTest }: { server: McpServer; 
           <span className="text-text-muted truncate">— {testResult.message}</span>
         </div>
       )}
+    </div>
+  )
+}
+
+function QuickImportModal({
+  targetLabel,
+  existingNames,
+  onClose,
+  onImport,
+}: {
+  targetLabel: string
+  existingNames: string[]
+  onClose: () => void
+  onImport: (servers: McpServer[]) => Promise<void> | void
+}) {
+  const { t } = useI18n()
+  const [input, setInput] = useState('')
+  const [importing, setImporting] = useState(false)
+
+  const parsed = useMemo(() => parseMcpImportInput(input), [input])
+  const prepared = useMemo(
+    () => (parsed ? prepareImportedServers(parsed.servers, existingNames) : null),
+    [existingNames, parsed],
+  )
+  const warnings = useMemo(
+    () => [...(parsed?.warnings || []), ...(prepared?.warnings || [])],
+    [parsed, prepared],
+  )
+
+  async function handleImport() {
+    if (!prepared || !prepared.servers.length) return
+    setImporting(true)
+    try {
+      await onImport(prepared.servers)
+      onClose()
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const showParseFailure = input.trim().length > 0 && !parsed
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-2xl border border-border/10 bg-surface-1 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-border/[0.06] px-5 py-4">
+          <div>
+            <h3 className="text-base font-semibold text-text-primary">{t('mcp.quick_import')}</h3>
+            <p className="mt-1 text-xs text-text-muted">{t('mcp.import_desc', { target: targetLabel })}</p>
+          </div>
+          <button onClick={onClose} className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          <div>
+            <label className="mb-1 block text-[11px] text-text-muted">{t('mcp.import_input')}</label>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              rows={9}
+              placeholder={t('mcp.import_placeholder')}
+              className="w-full resize-none rounded-xl border border-border/[0.08] bg-surface-2 px-3 py-2 text-sm font-mono text-text-primary placeholder:text-text-muted"
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="rounded-xl border border-border/[0.08] bg-surface-2/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-text-secondary">{t('mcp.detected_format')}</span>
+                <span className="badge bg-surface-4 text-text-muted text-[10px]">
+                  {parsed?.format || (showParseFailure ? t('mcp.import_unrecognized') : t('mcp.import_waiting'))}
+                </span>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {prepared?.servers.length ? prepared.servers.map((server, index) => (
+                  <div key={`${server.name}-${index}`} className="rounded-lg border border-border/[0.06] bg-surface-3/40 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-text-primary">{server.name}</span>
+                      <span className="badge bg-surface-4 text-text-muted text-[10px]">{server.type || (server.url ? 'http' : 'stdio')}</span>
+                    </div>
+                    <div className="mt-1 truncate text-xs font-mono text-text-muted">
+                      {server.url || `${server.command || ''} ${(server.args || []).join(' ')}`.trim()}
+                    </div>
+                    {(server.headers && Object.keys(server.headers).length > 0) || (server.env && Object.keys(server.env).length > 0) ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {Object.keys(server.headers || {}).map((key) => (
+                          <span key={`header-${key}`} className="badge bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px]">{key}</span>
+                        ))}
+                        {Object.keys(server.env || {}).map((key) => (
+                          <span key={`env-${key}`} className="badge bg-surface-4 text-text-muted text-[10px]">{key}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )) : (
+                  <p className="text-xs text-text-muted">
+                    {showParseFailure ? t('mcp.import_parse_failed') : t('mcp.import_preview_empty')}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/[0.08] bg-surface-2/60 p-4">
+              <h4 className="text-xs font-medium text-text-secondary">{t('mcp.import_notes')}</h4>
+              <div className="mt-3 space-y-2">
+                {warnings.length > 0 ? warnings.map((warning, index) => (
+                  <div key={index} className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                    {warning}
+                  </div>
+                )) : (
+                  <p className="text-xs text-text-muted">{t('mcp.import_no_warnings')}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-border/[0.06] px-5 py-4">
+          <p className="text-[11px] text-text-muted">{t('mcp.import_footer')}</p>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-3">
+              {t('common.cancel')}
+            </button>
+            <button
+              onClick={handleImport}
+              disabled={!prepared || prepared.servers.length === 0 || importing}
+              className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+            >
+              {importing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+              {t('mcp.import_action')}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -931,11 +1203,23 @@ function EditForm({ editing, setEditing, onCancel, onSave, isNew, existingNames 
         </div>
       </div>
       {editing.type === 'url' ? (
-        <div>
-          <label className="block text-[11px] text-text-muted mb-1">URL</label>
-          <input value={editing.url} onChange={(e) => setEditing({ ...editing, url: e.target.value })} placeholder="https://mcp.example.com/mcp"
-            className="w-full bg-surface-2 border border-border/[0.06] rounded-lg px-3 py-1.5 text-sm text-text-primary font-mono placeholder:text-text-muted" />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className="block text-[11px] text-text-muted mb-1">URL</label>
+              <input value={editing.url} onChange={(e) => setEditing({ ...editing, url: e.target.value })} placeholder="https://mcp.example.com/mcp"
+                className="w-full bg-surface-2 border border-border/[0.06] rounded-lg px-3 py-1.5 text-sm text-text-primary font-mono placeholder:text-text-muted" />
+            </div>
+            <div>
+              <label className="block text-[11px] text-text-muted mb-1">{t('mcp.transport')}</label>
+              <select value={editing.transport} onChange={(e) => setEditing({ ...editing, transport: e.target.value as 'http' | 'sse' | 'stdio' })}
+                className="w-full bg-surface-2 border border-border/[0.06] rounded-lg px-3 py-1.5 text-sm text-text-primary">
+                <option value="http">HTTP</option>
+                <option value="sse">SSE</option>
+              </select>
+            </div>
+          </div>
+        </>
       ) : (
         <>
           <div>
@@ -955,6 +1239,13 @@ function EditForm({ editing, setEditing, onCancel, onSave, isNew, existingNames 
         <textarea value={editing.env} onChange={(e) => setEditing({ ...editing, env: e.target.value })} placeholder={"API_KEY=your-key\nPORT=3000"} rows={2}
           className="w-full bg-surface-2 border border-border/[0.06] rounded-lg px-3 py-1.5 text-sm text-text-primary font-mono placeholder:text-text-muted resize-none" />
       </div>
+      {editing.type === 'url' && (
+        <div>
+          <label className="block text-[11px] text-text-muted mb-1">{t('mcp.headers')}</label>
+          <textarea value={editing.headers} onChange={(e) => setEditing({ ...editing, headers: e.target.value })} placeholder={"Authorization: Bearer ${env:API_KEY}\nX-Api-Key: your-key"} rows={3}
+            className="w-full bg-surface-2 border border-border/[0.06] rounded-lg px-3 py-1.5 text-sm text-text-primary font-mono placeholder:text-text-muted resize-none" />
+        </div>
+      )}
       <div className="flex justify-end gap-2 pt-1">
         <button onClick={onCancel} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-surface-4 transition-colors">
           <X size={13} /> {t('common.cancel')}
@@ -968,23 +1259,33 @@ function EditForm({ editing, setEditing, onCancel, onSave, isNew, existingNames 
   )
 }
 
-function McpListSection({ title, subtitle, servers, editing, editingIndex, setEditing, onEdit, onAdd, onCancelEdit, onSaveEdit, onDelete, onOpenFile, autoTest }: {
+function McpListSection({ title, subtitle, servers, editing, editingIndex, setEditing, onEdit, onAdd, onCancelEdit, onSaveEdit, onDelete, onOpenFile, onImport, autoTest }: {
   title: string; subtitle: string; servers: McpServer[]; editing: EditingServer | null; editingIndex: number
   setEditing: (e: EditingServer) => void
   onEdit: (i: number) => void; onAdd: () => void; onCancelEdit: () => void; onSaveEdit: (e: EditingServer) => void; onDelete: (i: number) => void; onOpenFile: () => void
+  onImport?: (servers: McpServer[]) => Promise<void> | void
   autoTest?: boolean
 }) {
   const { t } = useI18n()
+  const [showImport, setShowImport] = useState(false)
   return (
+    <>
     <div className="glass overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/[0.04]">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/[0.04]">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
           <p className="text-[11px] text-text-muted mt-0.5">{subtitle}</p>
         </div>
-        <button onClick={onOpenFile} className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors">
-          <FolderOpen size={12} /> {t('common.open_file')}
-        </button>
+        <div className="flex items-center gap-2">
+          {onImport && (
+            <button onClick={() => setShowImport(true)} className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors">
+              <Download size={12} /> {t('mcp.quick_import')}
+            </button>
+          )}
+          <button onClick={onOpenFile} className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors">
+            <FolderOpen size={12} /> {t('common.open_file')}
+          </button>
+        </div>
       </div>
       <div className="px-4 py-3 space-y-2">
         {servers.map((s, i) => <ServerRow key={s.name + i} server={s} onEdit={() => onEdit(i)} onDelete={() => onDelete(i)} autoTest={autoTest} />)}
@@ -997,6 +1298,15 @@ function McpListSection({ title, subtitle, servers, editing, editingIndex, setEd
         )}
       </div>
     </div>
+    {showImport && onImport && (
+      <QuickImportModal
+        targetLabel={title}
+        existingNames={servers.map((server) => server.name)}
+        onClose={() => setShowImport(false)}
+        onImport={onImport}
+      />
+    )}
+    </>
   )
 }
 

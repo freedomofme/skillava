@@ -12,7 +12,9 @@ export function parseCodexMcpServers(tomlContent: string): McpServer[] {
       command: config.command,
       args: config.args,
       url: config.url,
+      type: config.url ? 'http' : 'stdio',
       env: config.env,
+      headers: config.http_headers,
     }))
   } catch {
     return []
@@ -29,6 +31,7 @@ export function updateCodexMcpServers(tomlContent: string, servers: McpServer[])
       if (server.command) entry.command = server.command
       if (server.args?.length) entry.args = server.args
       if (server.env && Object.keys(server.env).length) entry.env = server.env
+      if (server.headers && Object.keys(server.headers).length) entry.http_headers = server.headers
       mcpServers[server.name] = entry
     }
     parsed.mcp_servers = mcpServers
@@ -48,8 +51,10 @@ export function parseClaudeSettingsMcp(jsonContent: string): McpServer[] {
       name,
       command: config.command,
       args: config.args,
-      url: config.url,
+      url: config.url || config.serverUrl,
+      type: config.type || ((config.url || config.serverUrl) ? 'http' : 'stdio'),
       env: config.env,
+      headers: config.headers,
     }))
   } catch {
     return []
@@ -58,14 +63,16 @@ export function parseClaudeSettingsMcp(jsonContent: string): McpServer[] {
 
 export function updateClaudeSettingsMcp(jsonContent: string, servers: McpServer[]): string {
   try {
-    const parsed = JSON.parse(jsonContent)
+    const parsed = jsonContent.trim() ? JSON.parse(jsonContent) : {}
     const mcpServers: Record<string, any> = {}
     for (const server of servers) {
       const entry: any = {}
+      if (server.type) entry.type = server.type
       if (server.url) entry.url = server.url
       if (server.command) entry.command = server.command
       if (server.args?.length) entry.args = server.args
       if (server.env && Object.keys(server.env).length) entry.env = server.env
+      if (server.headers && Object.keys(server.headers).length) entry.headers = server.headers
       mcpServers[server.name] = entry
     }
     parsed.mcpServers = mcpServers
@@ -80,11 +87,12 @@ export function updateClaudeSettingsMcp(jsonContent: string, servers: McpServer[
 function extractMcpServers(mcpObj: Record<string, any>): McpServer[] {
   return Object.entries(mcpObj).map(([name, config]: [string, any]) => ({
     name,
-    type: config.type,
+    type: config.type || ((config.url || config.serverUrl) ? 'http' : 'stdio'),
     command: config.command,
     args: config.args,
-    url: config.url,
+    url: config.url || config.serverUrl,
     env: config.env,
+    headers: config.headers,
   }))
 }
 
@@ -132,6 +140,7 @@ export function updateClaudeStateMcpGlobal(jsonContent: string, servers: McpServ
       if (server.command) entry.command = server.command
       if (server.args?.length) entry.args = server.args
       entry.env = server.env || {}
+      if (server.headers && Object.keys(server.headers).length) entry.headers = server.headers
       mcpServers[server.name] = entry
     }
     parsed.mcpServers = mcpServers
@@ -158,6 +167,7 @@ export function updateClaudeStateProjectMcp(
       if (server.command) entry.command = server.command
       if (server.args?.length) entry.args = server.args
       entry.env = server.env || {}
+      if (server.headers && Object.keys(server.headers).length) entry.headers = server.headers
       mcpServers[server.name] = entry
     }
     parsed.projects[projectPath].mcpServers = mcpServers
@@ -177,8 +187,10 @@ export function parseGeminiMcpServers(jsonContent: string): McpServer[] {
       name,
       command: config.command,
       args: config.args,
-      url: config.url,
+      url: config.url || config.serverUrl,
+      type: config.type || ((config.url || config.serverUrl) ? 'http' : 'stdio'),
       env: config.env,
+      headers: config.headers,
     }))
   } catch {
     return []
@@ -191,10 +203,12 @@ export function updateGeminiMcpServers(jsonContent: string, servers: McpServer[]
     const mcpServers: Record<string, any> = {}
     for (const server of servers) {
       const entry: any = {}
+      if (server.type) entry.type = server.type
       if (server.url) entry.url = server.url
       if (server.command) entry.command = server.command
       if (server.args?.length) entry.args = server.args
       if (server.env && Object.keys(server.env).length) entry.env = server.env
+      if (server.headers && Object.keys(server.headers).length) entry.headers = server.headers
       mcpServers[server.name] = entry
     }
     parsed.mcpServers = mcpServers

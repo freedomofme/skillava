@@ -13,6 +13,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteDir: (path: string) => ipcRenderer.invoke('delete-dir', path),
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   probeProjectMcp: (dir: string) => ipcRenderer.invoke('probe-project-mcp', dir),
-  testMcpServer: (server: { command?: string; args?: string[]; url?: string; env?: Record<string, string> }) =>
+  testMcpServer: (server: { command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string> }) =>
     ipcRenderer.invoke('test-mcp-server', server),
 })

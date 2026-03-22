@@ -29,6 +29,7 @@ export interface McpServer {
   url?: string
   type?: string
   env?: Record<string, string>
+  headers?: Record<string, string>
 }
 
 export type McpScope = 'global' | 'project'
@@ -114,7 +115,7 @@ declare global {
       selectFolder: () => Promise<string | null>
       probeProjectMcp: (dir: string) => Promise<ProjectMcpProbe>
       testMcpServer: (server: {
-        command?: string; args?: string[]; url?: string; env?: Record<string, string>
+        command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string>
       }) => Promise<McpTestResult>
     }
   }

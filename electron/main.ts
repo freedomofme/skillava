@@ -377,16 +377,37 @@ function testMcpCommand(
   })
 }
 
+function resolveHeaderValue(value: string): string {
+  return value.replace(/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}|\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, varA, varB) => {
+    const envName = varA || varB
+    return process.env[envName] ?? match
+  })
+}
+
+function buildRequestHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([key, value]) => key.trim() && value !== undefined && value !== null)
+      .map(([key, value]) => [key, resolveHeaderValue(String(value))]),
+  )
+}
+
 async function testMcpUrl(
   url: string,
+  headers: Record<string, string> = {},
 ): Promise<{ ok: boolean; message: string; serverName?: string }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 10000)
   try {
+    const requestHeaders = buildRequestHeaders(headers)
     // Try POST (Streamable HTTP / standard MCP-over-HTTP)
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...requestHeaders,
+      },
       body: MCP_INIT_REQUEST,
       signal: controller.signal,
     })
@@ -410,7 +431,7 @@ async function testMcpUrl(
       const ctrl2 = new AbortController()
       const t2 = setTimeout(() => ctrl2.abort(), 5000)
       try {
-        const getRes = await fetch(url, { method: 'GET', signal: ctrl2.signal })
+        const getRes = await fetch(url, { method: 'GET', headers: requestHeaders, signal: ctrl2.signal })
         clearTimeout(t2)
         if (getRes.ok) return { ok: true, message: 'Reachable (SSE endpoint)' }
       } catch {} finally { clearTimeout(t2) }
@@ -425,10 +446,10 @@ async function testMcpUrl(
 }
 
 ipcMain.handle('test-mcp-server', async (_e, server: {
-  command?: string; args?: string[]; url?: string; env?: Record<string, string>
+  command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string>
 }) => {
   if (server.url) {
-    return testMcpUrl(server.url)
+    return testMcpUrl(server.url, server.headers || {})
   }
   if (server.command) {
     return testMcpCommand(server.command, server.args || [], server.env || {})
