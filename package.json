@@ -1,6 +1,6 @@
 {
   "name": "skillava",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Manage Skills & MCP configs for Claude Code, Codex, Cursor and more",
   "author": "Skill Ava Contributors",
   "license": "Apache-2.0",
@@ -18,7 +18,10 @@
     "productName": "Skill Ava",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "icon": "icon.png"
     },
     "files": [
