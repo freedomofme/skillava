@@ -46,6 +46,13 @@ function GlobalSkillsView({ configPaths, toolTab }: { configPaths: ConfigPaths; 
     setLoading(true)
     const dir = SKILLS_DIR_MAP[toolTab](configPaths)
     const data = await window.electronAPI.listSkills(dir)
+    if (toolTab === 'cursor' && configPaths.cursor.managedSkillsDir) {
+      const managed = await window.electronAPI.listSkills(configPaths.cursor.managedSkillsDir)
+      const seen = new Set(data.map((s) => s.name))
+      for (const s of managed) {
+        if (!seen.has(s.name)) data.push({ ...s, isSystem: true })
+      }
+    }
     setSkills(data)
     setSelectedSkill(null)
     setLoading(false)

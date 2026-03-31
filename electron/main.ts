@@ -31,7 +31,8 @@ const CONFIG_PATHS = {
   },
   cursor: {
     mcp: path.join(HOME, '.cursor', 'mcp.json'),
-    skillsDir: path.join(HOME, '.cursor', 'skills-cursor'),
+    skillsDir: path.join(HOME, '.cursor', 'skills'),
+    managedSkillsDir: path.join(HOME, '.cursor', 'skills-cursor'),
     rulesDir: path.join(HOME, '.cursor', 'rules'),
   },
   gemini: {
@@ -218,15 +219,24 @@ ipcMain.handle('read-skill', (_e, skillDir: string) => {
 
 ipcMain.handle('list-skills', (_e, skillsRootDir: string) => {
   assertPathAllowed(skillsRootDir)
+  function isDir(entry: fs.Dirent, parentDir: string): boolean {
+    if (entry.isDirectory()) return true
+    if (entry.isSymbolicLink()) {
+      try {
+        return fs.statSync(path.join(parentDir, entry.name)).isDirectory()
+      } catch { return false }
+    }
+    return false
+  }
   try {
     const entries = fs.readdirSync(skillsRootDir, { withFileTypes: true })
     const skills: { name: string; path: string; isSystem: boolean; description: string }[] = []
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue
+      if (!isDir(entry, skillsRootDir)) continue
       const fullPath = path.join(skillsRootDir, entry.name)
       if (entry.name === '.system') {
         for (const se of fs.readdirSync(fullPath, { withFileTypes: true })) {
-          if (!se.isDirectory()) continue
+          if (!isDir(se, fullPath)) continue
           const sp = path.join(fullPath, se.name)
           skills.push({ name: se.name, path: sp, isSystem: true, description: getSkillDescription(readFileSync(path.join(sp, 'SKILL.md'))) })
         }
@@ -494,7 +504,7 @@ ipcMain.handle('probe-project-mcp', (_e, projectDir: string) => {
 
   const skills: { name: string; path: string; tool: string; description: string }[] = []
   const codexSkillsDir = path.join(projectDir, '.codex', 'skills')
-  const cursorSkillsDir = path.join(projectDir, '.cursor', 'skills-cursor')
+  const cursorSkillsDir = path.join(projectDir, '.cursor', 'skills')
 
   for (const [dir, tool] of [[codexSkillsDir, 'Codex'], [cursorSkillsDir, 'Cursor']] as const) {
     if (!fs.existsSync(dir)) continue

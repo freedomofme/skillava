@@ -14,6 +14,7 @@ export interface ConfigPaths {
   cursor: {
     mcp: string
     skillsDir: string
+    managedSkillsDir: string
     rulesDir: string
   }
   gemini: {
