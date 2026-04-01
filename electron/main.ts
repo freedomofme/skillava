@@ -164,6 +164,37 @@ function resolveCommandPath(command: string, env: Record<string, string>): strin
 
 // ── IPC Handlers ──
 
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')).version as string
+const GITHUB_REPO = 'freedomofme/skillava'
+
+ipcMain.handle('get-app-version', () => APP_VERSION)
+
+ipcMain.handle('check-for-update', async () => {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'SkillAva' },
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (!res.ok) return { hasUpdate: false, error: `GitHub API ${res.status}` }
+    const data = await res.json()
+    const latest = (data.tag_name || '').replace(/^v/, '')
+    const current = APP_VERSION
+    const hasUpdate = latest !== current && latest > current
+    return {
+      hasUpdate,
+      currentVersion: current,
+      latestVersion: latest,
+      releaseUrl: data.html_url || `https://github.com/${GITHUB_REPO}/releases/latest`,
+      releaseNotes: data.body || '',
+    }
+  } catch (err: any) {
+    return { hasUpdate: false, error: err.message || 'Network error' }
+  }
+})
+
 ipcMain.handle('get-config-paths', () => CONFIG_PATHS)
 
 ipcMain.handle('read-file', (_e, filePath: string) => {

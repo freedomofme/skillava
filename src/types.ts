@@ -100,10 +100,21 @@ export interface ProjectMcpProbe {
   claudeSettingsPath: string
 }
 
+export interface UpdateInfo {
+  hasUpdate: boolean
+  currentVersion?: string
+  latestVersion?: string
+  releaseUrl?: string
+  releaseNotes?: string
+  error?: string
+}
+
 declare global {
   interface Window {
     electronAPI: {
       getConfigPaths: () => Promise<ConfigPaths>
+      getAppVersion: () => Promise<string>
+      checkForUpdate: () => Promise<UpdateInfo>
       readFile: (path: string) => Promise<string | null>
       writeFile: (path: string, content: string) => Promise<boolean>
       listDir: (path: string) => Promise<DirEntry[]>

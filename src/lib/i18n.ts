@@ -150,6 +150,12 @@ const translations = {
   'settings.version': { zh: '版本', en: 'Version' },
   'settings.license': { zh: '开源协议', en: 'License' },
   'settings.source_code': { zh: '源代码', en: 'Source Code' },
+  'settings.check_update': { zh: '检查更新', en: 'Check for Updates' },
+  'settings.checking': { zh: '检查中…', en: 'Checking…' },
+  'settings.update_available': { zh: '发现新版本 {version}', en: 'New version {version} available' },
+  'settings.up_to_date': { zh: '已是最新版本', en: 'Up to date' },
+  'settings.update_error': { zh: '检查失败: {error}', en: 'Check failed: {error}' },
+  'settings.download_update': { zh: '前往下载', en: 'Download' },
 } satisfies Record<string, Record<Locale, string>>
 
 export type TransKey = keyof typeof translations

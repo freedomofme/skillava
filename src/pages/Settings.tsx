@@ -1,8 +1,9 @@
-import { useState } from 'react'
-import { Globe, Info, Zap, Sun, Moon, Monitor } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Globe, Info, Zap, Sun, Moon, Monitor, RefreshCw, Download, CheckCircle, AlertCircle } from 'lucide-react'
 import { Locale } from '../lib/i18n'
 import { useI18n } from '../lib/i18n'
 import { Theme, loadSettings, saveSettings } from '../lib/settings'
+import { UpdateInfo } from '../types'
 
 interface SettingsProps {
   locale: Locale
@@ -19,6 +20,21 @@ const LANGUAGES: { value: Locale; label: string; flag: string }[] = [
 export default function Settings({ locale, onLocaleChange, theme, onThemeChange }: SettingsProps) {
   const { t } = useI18n()
   const [autoTestMcp, setAutoTestMcp] = useState(() => loadSettings().autoTestMcp)
+  const [appVersion, setAppVersion] = useState('…')
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'done'>('idle')
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+
+  useEffect(() => {
+    window.electronAPI.getAppVersion().then(setAppVersion)
+  }, [])
+
+  async function handleCheckUpdate() {
+    setUpdateState('checking')
+    setUpdateInfo(null)
+    const info = await window.electronAPI.checkForUpdate()
+    setUpdateInfo(info)
+    setUpdateState('done')
+  }
 
   function toggleAutoTest() {
     const next = !autoTestMcp
@@ -126,8 +142,49 @@ export default function Settings({ locale, onLocaleChange, theme, onThemeChange 
         <div className="px-5 py-4 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm text-text-secondary">{t('settings.version')}</span>
-            <span className="text-sm text-text-primary font-mono">0.1.0</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-text-primary font-mono">{appVersion}</span>
+              <button
+                onClick={handleCheckUpdate}
+                disabled={updateState === 'checking'}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all bg-surface-3/50 text-text-secondary hover:bg-surface-3 hover:text-text-primary disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={updateState === 'checking' ? 'animate-spin' : ''} />
+                {updateState === 'checking' ? t('settings.checking') : t('settings.check_update')}
+              </button>
+            </div>
           </div>
+          {updateInfo && (
+            <div className={`flex items-center justify-between rounded-lg px-3 py-2.5 ${
+              updateInfo.error ? 'bg-red-500/10' : updateInfo.hasUpdate ? 'bg-accent/10' : 'bg-emerald-500/10'
+            }`}>
+              <div className="flex items-center gap-2">
+                {updateInfo.error ? (
+                  <AlertCircle size={14} className="text-red-400" />
+                ) : updateInfo.hasUpdate ? (
+                  <Download size={14} className="text-accent" />
+                ) : (
+                  <CheckCircle size={14} className="text-emerald-400" />
+                )}
+                <span className="text-sm">
+                  {updateInfo.error
+                    ? t('settings.update_error', { error: updateInfo.error })
+                    : updateInfo.hasUpdate
+                      ? t('settings.update_available', { version: updateInfo.latestVersion || '' })
+                      : t('settings.up_to_date')}
+                </span>
+              </div>
+              {updateInfo.hasUpdate && updateInfo.releaseUrl && (
+                <button
+                  onClick={() => window.electronAPI.openExternal(updateInfo.releaseUrl!)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+                >
+                  <Download size={12} />
+                  {t('settings.download_update')}
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-sm text-text-secondary">{t('settings.license')}</span>
             <span className="text-sm text-text-primary">Apache 2.0</span>
