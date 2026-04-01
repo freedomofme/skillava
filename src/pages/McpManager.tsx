@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useI18n } from '../lib/i18n'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useI18n, type TransKey } from '../lib/i18n'
 import {
   Plus, Trash2, Edit3, Save, X, Server, Globe, Terminal,
   FolderOpen, ChevronDown, ChevronRight, Folder, FolderPlus,
-  FileJson, AlertCircle, Zap, Loader2, CheckCircle2, XCircle, Download,
+  FileJson, AlertCircle, Zap, Loader2, CheckCircle2, XCircle, Download, Copy,
 } from 'lucide-react'
 import { ConfigPaths, McpServer, McpGroup, McpTestResult } from '../types'
 import {
@@ -152,6 +152,97 @@ function serializeMcpJson(servers: McpServer[]): string {
   return JSON.stringify({ mcpServers }, null, 2)
 }
 
+// ── Cross-tool MCP copy (append one server to another tool's config) ──
+
+type McpCopyDestination = 'codex' | 'cursor' | 'gemini' | 'claude-settings' | 'claude-global'
+
+function cloneMcpServer(s: McpServer): McpServer {
+  return {
+    ...s,
+    args: s.args ? [...s.args] : undefined,
+    env: s.env ? { ...s.env } : undefined,
+    headers: s.headers ? { ...s.headers } : undefined,
+  }
+}
+
+async function appendMcpToCodex(configPaths: ConfigPaths, server: McpServer): Promise<void> {
+  const raw = (await window.electronAPI.readFile(configPaths.codex.config)) ?? ''
+  const existing = raw ? parseCodexMcpServers(raw) : []
+  const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
+  const newContent = updateCodexMcpServers(raw, [...existing, ...prep.servers])
+  const ok = await window.electronAPI.writeFile(configPaths.codex.config, newContent)
+  if (!ok) throw new Error('write failed')
+}
+
+async function appendMcpToCursor(configPaths: ConfigPaths, server: McpServer): Promise<void> {
+  const raw = await window.electronAPI.readFile(configPaths.cursor.mcp)
+  const existing = raw ? parseMcpJson(raw) : []
+  const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
+  const newContent = serializeMcpJson([...existing, ...prep.servers])
+  const ok = await window.electronAPI.writeFile(configPaths.cursor.mcp, newContent)
+  if (!ok) throw new Error('write failed')
+}
+
+async function appendMcpToGemini(configPaths: ConfigPaths, server: McpServer): Promise<void> {
+  const raw = (await window.electronAPI.readFile(configPaths.gemini.settings)) ?? ''
+  const existing = raw ? parseGeminiMcpServers(raw) : []
+  const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
+  const newContent = updateGeminiMcpServers(raw, [...existing, ...prep.servers])
+  const ok = await window.electronAPI.writeFile(configPaths.gemini.settings, newContent)
+  if (!ok) throw new Error('write failed')
+}
+
+async function appendMcpToClaudeSettings(configPaths: ConfigPaths, server: McpServer): Promise<void> {
+  const raw = (await window.electronAPI.readFile(configPaths.claude.settings)) ?? ''
+  const existing = raw ? parseClaudeSettingsMcp(raw) : []
+  const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
+  const newContent = updateClaudeSettingsMcp(raw, [...existing, ...prep.servers])
+  const ok = await window.electronAPI.writeFile(configPaths.claude.settings, newContent)
+  if (!ok) throw new Error('write failed')
+}
+
+async function appendMcpToClaudeGlobal(configPaths: ConfigPaths, server: McpServer): Promise<void> {
+  const raw = (await window.electronAPI.readFile(configPaths.claude.state)) ?? ''
+  if (!raw.trim()) throw new Error('~/.claude.json missing or empty')
+  const groups = parseClaudeStateMcp(raw)
+  const globalGroup = groups.find((g) => g.scope === 'global')
+  const existing = globalGroup?.servers ?? []
+  const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
+  const newContent = updateClaudeStateMcpGlobal(raw, [...existing, ...prep.servers])
+  const ok = await window.electronAPI.writeFile(configPaths.claude.state, newContent)
+  if (!ok) throw new Error('write failed')
+}
+
+function makeMcpCopyTargets(
+  configPaths: ConfigPaths,
+  server: McpServer,
+  exclude: Set<McpCopyDestination>,
+  showToast: (type: 'success' | 'error', message: string) => void,
+  t: (key: TransKey, vars?: Record<string, string>) => string,
+): { label: string; onCopy: () => Promise<void> }[] {
+  const targets: { label: string; onCopy: () => Promise<void> }[] = []
+  const push = (dest: McpCopyDestination, i18nKey: TransKey, fn: () => Promise<void>) => {
+    if (exclude.has(dest)) return
+    targets.push({
+      label: t(i18nKey),
+      onCopy: async () => {
+        try {
+          await fn()
+          showToast('success', t('mcp.copy_done', { name: server.name, target: t(i18nKey) }))
+        } catch (err: any) {
+          showToast('error', t('mcp.copy_failed', { error: err?.message || 'unknown' }))
+        }
+      },
+    })
+  }
+  push('codex', 'mcp.copy_target.codex', () => appendMcpToCodex(configPaths, server))
+  push('cursor', 'mcp.copy_target.cursor', () => appendMcpToCursor(configPaths, server))
+  push('gemini', 'mcp.copy_target.gemini', () => appendMcpToGemini(configPaths, server))
+  push('claude-settings', 'mcp.copy_target.claude_settings', () => appendMcpToClaudeSettings(configPaths, server))
+  push('claude-global', 'mcp.copy_target.claude_global', () => appendMcpToClaudeGlobal(configPaths, server))
+  return targets
+}
+
 // ── Codex MCP Sub-view ──
 
 function CodexMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; autoTest?: boolean }) {
@@ -207,6 +298,7 @@ function CodexMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; aut
       onDelete={(i) => handleSave(servers.filter((_, idx) => idx !== i))}
       onOpenFile={() => window.electronAPI.openInFinder(configPaths.codex.config)}
       onImport={(imported) => handleSave([...servers, ...imported])}
+      copyTargetsForServer={(s) => makeMcpCopyTargets(configPaths, s, new Set<McpCopyDestination>(['codex']), showToast, t)}
       autoTest={autoTest}
     />
   )
@@ -269,6 +361,7 @@ function CursorMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       onDelete={(i) => handleSave(servers.filter((_, idx) => idx !== i))}
       onOpenFile={() => window.electronAPI.openInFinder(configPaths.cursor.mcp)}
       onImport={(imported) => handleSave([...servers, ...imported])}
+      copyTargetsForServer={(s) => makeMcpCopyTargets(configPaths, s, new Set<McpCopyDestination>(['cursor']), showToast, t)}
       autoTest={autoTest}
     />
   )
@@ -334,6 +427,7 @@ function GeminiMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       onDelete={(i) => handleSave(servers.filter((_, idx) => idx !== i))}
       onOpenFile={() => window.electronAPI.openInFinder(configPaths.gemini.settings)}
       onImport={(imported) => handleSave([...servers, ...imported])}
+      copyTargetsForServer={(s) => makeMcpCopyTargets(configPaths, s, new Set<McpCopyDestination>(['gemini']), showToast, t)}
       autoTest={autoTest}
     />
   )
@@ -482,6 +576,12 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       cancelEdit={cancelEdit}
       handleSaveEdit={handleSaveEdit}
       handleDelete={handleDelete}
+      copyTargetsForServer={(server, groupKey) => {
+        const ex = new Set<McpCopyDestination>()
+        if (groupKey === 'settings') ex.add('claude-settings')
+        if (groupKey === 'global') ex.add('claude-global')
+        return makeMcpCopyTargets(configPaths, server, ex, showToast, t)
+      }}
       autoTest={autoTest}
     />
   )
@@ -775,10 +875,14 @@ function ProjectFoldersMcpView({ configPaths, autoTest }: { configPaths: ConfigP
                       </div>
 
                       {entry.servers.map((server, si) => (
-                        <ServerRow key={server.name + si} server={server}
+                        <ServerRow
+                          key={server.name + si}
+                          server={server}
                           onEdit={() => startEdit(gk, si, server)}
                           onDelete={() => handleDelete(gk, si)}
-                          autoTest={autoTest} />
+                          copyTargets={makeMcpCopyTargets(configPaths, server, new Set(), showToast, t)}
+                          autoTest={autoTest}
+                        />
                       ))}
 
                       {entry.servers.length === 0 && !isEditingThis && (
@@ -853,7 +957,8 @@ interface RenderGroup {
 function GroupedMcpView({
   groups, expandedGroups, toggleGroup,
   editTarget, addTarget, editing, setEditing,
-  startEdit, startAdd, cancelEdit, handleSaveEdit, handleDelete, autoTest,
+  startEdit, startAdd, cancelEdit, handleSaveEdit, handleDelete,
+  copyTargetsForServer, autoTest,
 }: {
   groups: RenderGroup[]
   expandedGroups: Set<string>
@@ -867,6 +972,7 @@ function GroupedMcpView({
   cancelEdit: () => void
   handleSaveEdit: (groupKey: string, editData: EditingServer, index: number) => void
   handleDelete: (groupKey: string, index: number) => void
+  copyTargetsForServer?: (server: McpServer, groupKey: string) => { label: string; onCopy: () => Promise<void> }[]
   autoTest?: boolean
 }) {
   const { t } = useI18n()
@@ -915,7 +1021,14 @@ function GroupedMcpView({
             {isExpanded && (
               <div className="border-t border-border/[0.04] px-4 py-3 space-y-2">
                 {group.servers.map((server, idx) => (
-                  <ServerRow key={server.name + idx} server={server} onEdit={() => startEdit(group.key, idx, server)} onDelete={() => handleDelete(group.key, idx)} autoTest={autoTest} />
+                  <ServerRow
+                    key={server.name + idx}
+                    server={server}
+                    onEdit={() => startEdit(group.key, idx, server)}
+                    onDelete={() => handleDelete(group.key, idx)}
+                    copyTargets={copyTargetsForServer?.(server, group.key)}
+                    autoTest={autoTest}
+                  />
                 ))}
                 {group.servers.length === 0 && !isEditingThis && <p className="text-xs text-text-muted py-2 text-center">{t('mcp.no_servers')}</p>}
                 {isEditingThis && editing && (
@@ -958,10 +1071,29 @@ function GroupedMcpView({
   )
 }
 
-function ServerRow({ server, onEdit, onDelete, autoTest }: { server: McpServer; onEdit: () => void; onDelete: () => void; autoTest?: boolean }) {
+function ServerRow({
+  server, onEdit, onDelete, autoTest, copyTargets,
+}: {
+  server: McpServer
+  onEdit: () => void
+  onDelete: () => void
+  autoTest?: boolean
+  copyTargets?: { label: string; onCopy: () => Promise<void> }[]
+}) {
   const { t } = useI18n()
   const [testState, setTestState] = useState<'idle' | 'testing'>('idle')
   const [testResult, setTestResult] = useState<McpTestResult | null>(null)
+  const [copyOpen, setCopyOpen] = useState(false)
+  const copyWrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!copyOpen) return
+    function onDocMouseDown(e: MouseEvent) {
+      if (copyWrapRef.current && !copyWrapRef.current.contains(e.target as Node)) setCopyOpen(false)
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [copyOpen])
 
   function handleDelete() {
     if (!confirm(t('confirm.delete_mcp', { name: server.name }))) return
@@ -1014,7 +1146,36 @@ function ServerRow({ server, onEdit, onDelete, autoTest }: { server: McpServer; 
             </div>
           ) : null}
         </div>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-3">
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-3 items-start">
+          {copyTargets && copyTargets.length > 0 && (
+            <div className="relative" ref={copyWrapRef}>
+              <button
+                type="button"
+                onClick={() => setCopyOpen((o) => !o)}
+                className="p-1.5 rounded-md hover:bg-sky-500/15 text-text-muted hover:text-sky-600 dark:hover:text-sky-300 transition-colors"
+                title={t('mcp.copy')}
+              >
+                <Copy size={13} />
+              </button>
+              {copyOpen && (
+                <div className="absolute right-0 top-full z-20 mt-1 min-w-[200px] max-w-[280px] rounded-lg border border-border/[0.12] bg-surface-1 py-1 shadow-xl">
+                  {copyTargets.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      className="w-full px-3 py-2 text-left text-xs text-text-primary hover:bg-surface-3 transition-colors"
+                      onClick={async () => {
+                        setCopyOpen(false)
+                        await item.onCopy()
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <button onClick={runTest} disabled={testState === 'testing'}
             className="p-1.5 rounded-md hover:bg-amber-500/20 text-text-muted hover:text-amber-700 dark:text-amber-300 transition-colors disabled:opacity-50"
             title={t('mcp.test')}>
@@ -1259,11 +1420,12 @@ function EditForm({ editing, setEditing, onCancel, onSave, isNew, existingNames 
   )
 }
 
-function McpListSection({ title, subtitle, servers, editing, editingIndex, setEditing, onEdit, onAdd, onCancelEdit, onSaveEdit, onDelete, onOpenFile, onImport, autoTest }: {
+function McpListSection({ title, subtitle, servers, editing, editingIndex, setEditing, onEdit, onAdd, onCancelEdit, onSaveEdit, onDelete, onOpenFile, onImport, copyTargetsForServer, autoTest }: {
   title: string; subtitle: string; servers: McpServer[]; editing: EditingServer | null; editingIndex: number
   setEditing: (e: EditingServer) => void
   onEdit: (i: number) => void; onAdd: () => void; onCancelEdit: () => void; onSaveEdit: (e: EditingServer) => void; onDelete: (i: number) => void; onOpenFile: () => void
   onImport?: (servers: McpServer[]) => Promise<void> | void
+  copyTargetsForServer?: (server: McpServer) => { label: string; onCopy: () => Promise<void> }[]
   autoTest?: boolean
 }) {
   const { t } = useI18n()
@@ -1288,7 +1450,16 @@ function McpListSection({ title, subtitle, servers, editing, editingIndex, setEd
         </div>
       </div>
       <div className="px-4 py-3 space-y-2">
-        {servers.map((s, i) => <ServerRow key={s.name + i} server={s} onEdit={() => onEdit(i)} onDelete={() => onDelete(i)} autoTest={autoTest} />)}
+        {servers.map((s, i) => (
+          <ServerRow
+            key={s.name + i}
+            server={s}
+            onEdit={() => onEdit(i)}
+            onDelete={() => onDelete(i)}
+            copyTargets={copyTargetsForServer?.(s)}
+            autoTest={autoTest}
+          />
+        ))}
         {servers.length === 0 && !editing && <p className="text-xs text-text-muted py-3 text-center">{t('mcp.no_servers')}</p>}
         {editing && <EditForm editing={editing} setEditing={setEditing} onCancel={onCancelEdit} onSave={() => editing && onSaveEdit(editing)} isNew={editingIndex < 0} existingNames={servers.map((s) => s.name)} />}
         {!editing && (
