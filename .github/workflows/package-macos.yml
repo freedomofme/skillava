@@ -26,6 +26,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # electron-builder and the app read version from package.json; the tag alone is not enough.
+      - name: Sync package version from git tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm pkg set "version=${GITHUB_REF_NAME#v}"
+
       - name: Build release artifacts
         run: |
           npm run build
