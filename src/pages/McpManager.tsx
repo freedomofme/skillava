@@ -11,8 +11,6 @@ import {
   updateCodexMcpServers,
   parseGeminiMcpServers,
   updateGeminiMcpServers,
-  parseClaudeSettingsMcp,
-  updateClaudeSettingsMcp,
   parseClaudeStateMcp,
   updateClaudeStateMcpGlobal,
   updateClaudeStateProjectMcp,
@@ -154,7 +152,7 @@ function serializeMcpJson(servers: McpServer[]): string {
 
 // ── Cross-tool MCP copy (append one server to another tool's config) ──
 
-type McpCopyDestination = 'codex' | 'cursor' | 'gemini' | 'claude-settings' | 'claude-global'
+type McpCopyDestination = 'codex' | 'cursor' | 'gemini' | 'claude-global'
 
 function cloneMcpServer(s: McpServer): McpServer {
   return {
@@ -189,15 +187,6 @@ async function appendMcpToGemini(configPaths: ConfigPaths, server: McpServer): P
   const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
   const newContent = updateGeminiMcpServers(raw, [...existing, ...prep.servers])
   const ok = await window.electronAPI.writeFile(configPaths.gemini.settings, newContent)
-  if (!ok) throw new Error('write failed')
-}
-
-async function appendMcpToClaudeSettings(configPaths: ConfigPaths, server: McpServer): Promise<void> {
-  const raw = (await window.electronAPI.readFile(configPaths.claude.settings)) ?? ''
-  const existing = raw ? parseClaudeSettingsMcp(raw) : []
-  const prep = prepareImportedServers([cloneMcpServer(server)], existing.map((x) => x.name))
-  const newContent = updateClaudeSettingsMcp(raw, [...existing, ...prep.servers])
-  const ok = await window.electronAPI.writeFile(configPaths.claude.settings, newContent)
   if (!ok) throw new Error('write failed')
 }
 
@@ -238,7 +227,6 @@ function makeMcpCopyTargets(
   push('codex', 'mcp.copy_target.codex', () => appendMcpToCodex(configPaths, server))
   push('cursor', 'mcp.copy_target.cursor', () => appendMcpToCursor(configPaths, server))
   push('gemini', 'mcp.copy_target.gemini', () => appendMcpToGemini(configPaths, server))
-  push('claude-settings', 'mcp.copy_target.claude_settings', () => appendMcpToClaudeSettings(configPaths, server))
   push('claude-global', 'mcp.copy_target.claude_global', () => appendMcpToClaudeGlobal(configPaths, server))
   return targets
 }
@@ -437,11 +425,9 @@ function GeminiMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
 
 function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; autoTest?: boolean }) {
   const { t } = useI18n()
-  const [settingsServers, setSettingsServers] = useState<McpServer[]>([])
-  const [settingsRaw, setSettingsRaw] = useState('')
   const [stateGroups, setStateGroups] = useState<McpGroup[]>([])
   const [stateRaw, setStateRaw] = useState('')
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['global', 'settings']))
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['global']))
   const [editTarget, setEditTarget] = useState<{ groupKey: string; index: number } | null>(null)
   const [editing, setEditing] = useState<EditingServer | null>(null)
   const [addTarget, setAddTarget] = useState<string | null>(null)
@@ -452,11 +438,6 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
     if (stateContent) {
       setStateRaw(stateContent)
       setStateGroups(parseClaudeStateMcp(stateContent))
-    }
-    const settingsContent = await window.electronAPI.readFile(configPaths.claude.settings)
-    if (settingsContent) {
-      setSettingsRaw(settingsContent)
-      setSettingsServers(parseClaudeSettingsMcp(settingsContent))
     }
   }, [configPaths])
 
@@ -501,24 +482,9 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       showToast('error', t('toast.save_failed', { error: err?.message || 'unknown' }))
     }
   }
-  async function saveSettings(servers: McpServer[]) {
-    try {
-      const c = updateClaudeSettingsMcp(settingsRaw, servers)
-      const ok = await window.electronAPI.writeFile(configPaths.claude.settings, c)
-      if (!ok) throw new Error('write returned false')
-      setSettingsRaw(c); setSettingsServers(parseClaudeSettingsMcp(c))
-      showToast('success', t('toast.saved'))
-    } catch (err: any) {
-      showToast('error', t('toast.save_failed', { error: err?.message || 'unknown' }))
-    }
-  }
-
   async function handleSaveEdit(groupKey: string, editData: EditingServer, index: number) {
     const server = editToServer(editData)
-    if (groupKey === 'settings') {
-      const l = index >= 0 ? settingsServers.map((s, i) => i === index ? server : s) : [...settingsServers, server]
-      await saveSettings(l)
-    } else if (groupKey === 'global') {
+    if (groupKey === 'global') {
       const g = stateGroups.find((g) => g.scope === 'global')
       const l = g?.servers || []
       await saveStateGlobal(index >= 0 ? l.map((s, i) => i === index ? server : s) : [...l, server])
@@ -531,8 +497,7 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   }
 
   async function handleDelete(groupKey: string, index: number) {
-    if (groupKey === 'settings') await saveSettings(settingsServers.filter((_, i) => i !== index))
-    else if (groupKey === 'global') {
+    if (groupKey === 'global') {
       const g = stateGroups.find((g) => g.scope === 'global')
       if (g) await saveStateGlobal(g.servers.filter((_, i) => i !== index))
     } else {
@@ -542,15 +507,6 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   }
 
   const renderGroups: RenderGroup[] = []
-  renderGroups.push({
-    key: 'settings',
-    label: 'settings.json',
-    hint: '~/.claude/settings.json',
-    filePath: configPaths.claude.settings,
-    icon: <Server size={14} className="text-emerald-400" />,
-    servers: settingsServers,
-    onImport: async (imported) => saveSettings([...settingsServers, ...imported]),
-  })
   const gg = stateGroups.find((g) => g.scope === 'global')
   if (gg) renderGroups.push({
     key: 'global',
@@ -561,6 +517,17 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
     servers: gg.servers,
     onImport: async (imported) => saveStateGlobal([...gg.servers, ...imported]),
   })
+  for (const pg of stateGroups.filter((g) => g.scope === 'project' && g.projectPath)) {
+    renderGroups.push({
+      key: pg.projectPath!,
+      label: pg.projectPath!,
+      hint: '~/.claude.json → projects[...].mcpServers',
+      filePath: configPaths.claude.state,
+      icon: <FolderOpen size={14} className="text-purple-400" />,
+      servers: pg.servers,
+      onImport: async (imported) => saveStateProject(pg.projectPath!, [...pg.servers, ...imported]),
+    })
+  }
 
   return (
     <GroupedMcpView
@@ -578,7 +545,6 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       handleDelete={handleDelete}
       copyTargetsForServer={(server, groupKey) => {
         const ex = new Set<McpCopyDestination>()
-        if (groupKey === 'settings') ex.add('claude-settings')
         if (groupKey === 'global') ex.add('claude-global')
         return makeMcpCopyTargets(configPaths, server, ex, showToast, t)
       }}
