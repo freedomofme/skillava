@@ -427,7 +427,7 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   const { t } = useI18n()
   const [stateGroups, setStateGroups] = useState<McpGroup[]>([])
   const [stateRaw, setStateRaw] = useState('')
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['global']))
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [editTarget, setEditTarget] = useState<{ groupKey: string; index: number } | null>(null)
   const [editing, setEditing] = useState<EditingServer | null>(null)
   const [addTarget, setAddTarget] = useState<string | null>(null)
@@ -442,6 +442,20 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
   }, [configPaths])
 
   useEffect(() => { load() }, [load])
+
+  // Default expansion: once groups are available, expand Global MCP by default.
+  // This is intentionally one-time (doesn't fight user toggles).
+  useEffect(() => {
+    if (expandedGroups.size > 0) return
+    if (stateGroups.length === 0) return
+
+    const next = new Set<string>()
+    const hasGlobal = stateGroups.some((g) => g.scope === 'global')
+    if (hasGlobal) next.add('global')
+    // If there is exactly one project group and no global, expand it.
+    if (!hasGlobal && stateGroups.length === 1 && stateGroups[0].projectPath) next.add(stateGroups[0].projectPath)
+    if (next.size > 0) setExpandedGroups(next)
+  }, [stateGroups, expandedGroups.size])
 
   function toggleGroup(key: string) {
     setExpandedGroups((prev) => {
