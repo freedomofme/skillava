@@ -452,8 +452,6 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
     const next = new Set<string>()
     const hasGlobal = stateGroups.some((g) => g.scope === 'global')
     if (hasGlobal) next.add('global')
-    // If there is exactly one project group and no global, expand it.
-    if (!hasGlobal && stateGroups.length === 1 && stateGroups[0].projectPath) next.add(stateGroups[0].projectPath)
     if (next.size > 0) setExpandedGroups(next)
   }, [stateGroups, expandedGroups.size])
 
@@ -485,39 +483,19 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
       showToast('error', t('toast.save_failed', { error: err?.message || 'unknown' }))
     }
   }
-  async function saveStateProject(pp: string, servers: McpServer[]) {
-    try {
-      const c = updateClaudeStateProjectMcp(stateRaw, pp, servers)
-      const ok = await window.electronAPI.writeFile(configPaths.claude.state, c)
-      if (!ok) throw new Error('write returned false')
-      setStateRaw(c); setStateGroups(parseClaudeStateMcp(c))
-      showToast('success', t('toast.saved'))
-    } catch (err: any) {
-      showToast('error', t('toast.save_failed', { error: err?.message || 'unknown' }))
-    }
-  }
   async function handleSaveEdit(groupKey: string, editData: EditingServer, index: number) {
     const server = editToServer(editData)
-    if (groupKey === 'global') {
-      const g = stateGroups.find((g) => g.scope === 'global')
-      const l = g?.servers || []
-      await saveStateGlobal(index >= 0 ? l.map((s, i) => i === index ? server : s) : [...l, server])
-    } else {
-      const g = stateGroups.find((g) => g.projectPath === groupKey)
-      const l = g?.servers || []
-      await saveStateProject(groupKey, index >= 0 ? l.map((s, i) => i === index ? server : s) : [...l, server])
-    }
+    if (groupKey !== 'global') return
+    const g = stateGroups.find((g) => g.scope === 'global')
+    const l = g?.servers || []
+    await saveStateGlobal(index >= 0 ? l.map((s, i) => i === index ? server : s) : [...l, server])
     cancelEdit()
   }
 
   async function handleDelete(groupKey: string, index: number) {
-    if (groupKey === 'global') {
-      const g = stateGroups.find((g) => g.scope === 'global')
-      if (g) await saveStateGlobal(g.servers.filter((_, i) => i !== index))
-    } else {
-      const g = stateGroups.find((g) => g.projectPath === groupKey)
-      if (g) await saveStateProject(groupKey, g.servers.filter((_, i) => i !== index))
-    }
+    if (groupKey !== 'global') return
+    const g = stateGroups.find((g) => g.scope === 'global')
+    if (g) await saveStateGlobal(g.servers.filter((_, i) => i !== index))
   }
 
   const renderGroups: RenderGroup[] = []
@@ -531,17 +509,6 @@ function ClaudeMcpView({ configPaths, autoTest }: { configPaths: ConfigPaths; au
     servers: gg.servers,
     onImport: async (imported) => saveStateGlobal([...gg.servers, ...imported]),
   })
-  for (const pg of stateGroups.filter((g) => g.scope === 'project' && g.projectPath)) {
-    renderGroups.push({
-      key: pg.projectPath!,
-      label: pg.projectPath!,
-      hint: '~/.claude.json → projects[...].mcpServers',
-      filePath: configPaths.claude.state,
-      icon: <FolderOpen size={14} className="text-purple-400" />,
-      servers: pg.servers,
-      onImport: async (imported) => saveStateProject(pg.projectPath!, [...pg.servers, ...imported]),
-    })
-  }
 
   return (
     <GroupedMcpView
